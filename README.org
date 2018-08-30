@@ -1,0 +1,250 @@
+* Go MySQL Probe
+
+Just looking to put together a quick MySQL probe using Go. Just looking to learn
+a little bit about the Go language and how to probe services for information.
+I won't attempt to login to the MySQL server, just use whatever TCP handshake it
+was using to determine various information about it.
+
+** Getting Go
+
+I don't know much Go. I haven't touched it in several years, and in Go's
+lifetime thats nearly a lifetime. However there is a plethora of information
+about it and how to install and hopefully I'll come up to speed really quickly.
+
+I'll elide the details of intalling and getting started with Go here because the
+web help is so full featured.
+
+** Getting a Test Setup Going
+
+Docker looks like an obvious choice for this particular use case. The ability to
+setup multiple containers with different versions of MySQL with a simple command
+line invocation? Yes please! Since my internet connection is terrible, it
+appears that the 5.5.59 tag is the smallest. So for now I can just snag that
+version, and then begin writing bits and pieces of probers against that and then
+start including other versions to test the stability of the probes against that.
+
+So lets start a docker compose file with that we're looking for:
+
+#+BEGIN_SRC yaml
+version: '3'
+
+services:
+  mysql-5-5-59:
+    image: mysql:5.5.59
+    ports:
+      - 3306:3306
+#+END_SRC
+
+Ok, so lets grab it:
+
+#+BEGIN_SRC bash
+docker-compose pull
+#+END_SRC
+
+Finally, that finished. Lets try running it:
+
+#+BEGIN_SRC bash
+docker-compose up
+#+END_SRC
+
+#+BEGIN_SRC 
+% docker-compose up  
+Creating network "goprobemysql_default" with the default driver
+Creating goprobemysql_mysql-5-5-59_1 ... 
+Creating goprobemysql_mysql-5-5-59_1 ... done
+Attaching to goprobemysql_mysql-5-5-59_1
+mysql-5-5-59_1  | error: database is uninitialized and password option is not specified 
+mysql-5-5-59_1  |   You need to specify one of MYSQL_ROOT_PASSWORD, MYSQL_ALLOW_EMPTY_PASSWORD and MYSQL_RANDOM_ROOT_PASSWORD
+goprobemysql_mysql-5-5-59_1 exited with code 1
+#+END_SRC
+
+OK, so I guess it doesn't run out of the box. Since I don't want anything to
+allow login I'll just set a password and then just never use it during login.
+
+#+BEGIN_SRC yaml
+version: '3'
+
+services:
+  mysql-5-5-59:
+    image: mysql:5.5.59
+    environment:
+      - MYSQL_ROOT_PASSWORD=evian
+    ports:
+      - 3306:3306
+#+END_SRC
+
+This does the trick, I'll just need to remember this password for later in case
+I store any important information in this database.
+
+
+** Running some probes against it
+
+Well first thing that comes to mind is looking at some default response. Lets
+just try and connect via telnet to see if its even responding.
+
+#+BEGIN_EXAMPLE
+[root@T440:~/devel/go-probe-mysql]
+% telnet localhost 3306
+Trying 127.0.0.1...
+Connected to localhost.
+Escape character is '^]'.
+J
+5.5.59n4U14Os�g,BJ->1z7A"%mysql_native_password
+#+END_EXAMPLE
+
+OK, wow, thats some info right there. Looks like it prints the version of the
+server in the banner? Follow by a bunch of bytes. Looks like its time to start
+looking at the MySQL documentation to see what this information is, looks like I
+can get a bunch of information here.
+
+After some quick Google-ing, the answer falls in my lap:
+
+https://www.safaribooksonline.com/library/view/understanding-mysql-internals/0596009577/ch04s04.html
+
+This appears to be a pretty descriptive source of whats happening in the initial
+handshake. And since the scope of this exercise is limited to what I can find
+without logging into the server, seems like a pretty good start. I could
+probably start investigating things like side-channels and timing analysis
+against the server to determine its load and fun things like that, but we'll
+start small and straightforward.
+
+Looks like this exercise will boil down into learning how to make UDP and/or TCP
+connections with Golang, and then from there doing some fairly basic switch
+logic based on the derived version to get additional information.
+
+** How to Run and Build
+
+The to just run it and see what happens:
+
+#+BEGIN_SRC bash
+bash ./test
+#+END_SRC
+
+This will do the following:
+
+- Pull down the Go deps (version comparison)
+- Build the Go binary
+- Pull the Docker images
+- Spin up three different versions of MySQL in Docker
+- Run the scanner against them
+
+This assumes that ~make~, ~docker~, ~bash~ and ~go~ are installed. Additional MySQL versions can be tested
+by running the script with a MYSQL_VERSIONS environment variable, this version
+however must be available on the DockerHub.
+
+It is slightly racey with the timer I put in to wait for MySQL to come up, but
+30s worked and I didn't want to add ~nc~ as a dependency to the running machine.
+
+Example output:
+
+#+BEGIN_EXAMPLE
+Assuming make is installed
+Build the targets...
+go get github.com/mcuadros/go-version
+go build .
+Pulling test Docker images...
+5.5.59: Pulling from library/mysql
+Digest: sha256:7eb55202ef97e669b489772aa205cd025d4a14c31705e42f97821ea836c7e691
+Status: Image is up to date for mysql:5.5.59
+5.7.23: Pulling from library/mysql
+Digest: sha256:e25e2768e910223db3095c1560aa2255371986b24fbebf4b015bae3cc60b9b34
+Status: Image is up to date for mysql:5.7.23
+8.0.12: Pulling from library/mysql
+Digest: sha256:d39a8ab7679df309e7eff6ddba434ad5747cc2a2acee2d7c60d8221c9acedcad
+Status: Image is up to date for mysql:8.0.12
+Running probe against MySQL 5.5.59
+074aef9f3881bd4d3aaa7e28610068af4c346cae56b23e23d653c4bec63008f4
+Waiting 30s for MySQL to start listening...
+MySQL Handshake Dump
+====================
+    MySQL Version:	 5.5.59
+    MySQL Protocol:	 10
+    MySQL Char Set:	 8
+    MySQL Thread ID:	 1
+    MySQL Server Status:
+     -  SERVER_STATUS_AUTOCOMMIT
+    MySQL Capabilities:
+     -  CLIENT_FOUND_ROWS
+     -  CLIENT_INTERACTIVE
+     -  CLIENT_IGNORE_SIGPIPE
+     -  CLIENT_TRANSACTIONS
+     -  CLIENT_RESERVED
+     -  CLIENT_NO_SCHEMA
+     -  CLIENT_ODBC
+     -  CLIENT_LOCAL_FILES
+     -  CLIENT_IGNORE_SPACE
+     -  CLIENT_CONNECT_WITH_DB
+     -  CLIENT_PROTOCOL_41
+     -  CLIENT_SECURE_CONNECTION
+     -  CLIENT_LONG_PASSWORD
+     -  CLIENT_LONG_FLAG
+     -  CLIENT_COMPRESS
+    MySQL Scramble:	 [44 55 111 73 95 34 42 73]
+nscott-debug
+Running probe against MySQL 5.7.23
+9d9d184dce700956535c84a5b470d98d7fcae1e99ac0b1af7e157d591384eaf2
+Waiting 30s for MySQL to start listening...
+MySQL Handshake Dump
+====================
+    MySQL Version:	 5.7.23
+    MySQL Protocol:	 10
+    MySQL Char Set:	 8
+    MySQL Thread ID:	 2
+    MySQL Server Status:
+     -  SERVER_STATUS_AUTOCOMMIT
+    MySQL Capabilities:
+     -  CLIENT_RESERVED
+     -  CLIENT_FOUND_ROWS
+     -  CLIENT_LONG_FLAG
+     -  CLIENT_COMPRESS
+     -  CLIENT_LOCAL_FILES
+     -  CLIENT_SSL
+     -  CLIENT_LONG_PASSWORD
+     -  CLIENT_NO_SCHEMA
+     -  CLIENT_IGNORE_SPACE
+     -  CLIENT_PROTOCOL_41
+     -  CLIENT_INTERACTIVE
+     -  CLIENT_TRANSACTIONS
+     -  CLIENT_CONNECT_WITH_DB
+     -  CLIENT_ODBC
+     -  CLIENT_IGNORE_SIGPIPE
+     -  CLIENT_SECURE_CONNECTION
+    MySQL Scramble:	 [55 95 42 10 40 87 79 80]
+nscott-debug
+Running probe against MySQL 8.0.12
+bad6b53cc48b9daee8319da1d7d5bd360b6e56f038f6ee5aa0f8581369f5cfe2
+Waiting 30s for MySQL to start listening...
+MySQL Handshake Dump
+====================
+    MySQL Version:	 8.0.12
+    MySQL Protocol:	 10
+    MySQL Char Set:	 255
+    MySQL Thread ID:	 8
+    MySQL Server Status:
+     -  SERVER_STATUS_AUTOCOMMIT
+    MySQL Capabilities:
+     -  CLIENT_TRANSACTIONS
+     -  CLIENT_FOUND_ROWS
+     -  CLIENT_CONNECT_WITH_DB
+     -  CLIENT_ODBC
+     -  CLIENT_IGNORE_SPACE
+     -  CLIENT_SSL
+     -  CLIENT_IGNORE_SIGPIPE
+     -  CLIENT_LONG_PASSWORD
+     -  CLIENT_PROTOCOL_41
+     -  CLIENT_LONG_FLAG
+     -  CLIENT_NO_SCHEMA
+     -  CLIENT_COMPRESS
+     -  CLIENT_LOCAL_FILES
+     -  CLIENT_INTERACTIVE
+     -  CLIENT_RESERVED
+     -  CLIENT_SECURE_CONNECTION
+    MySQL Scramble:	 [87 87 54 33 45 113 118 87]
+nscott-debug
+#+END_EXAMPLE
+
+
+** Thoughts
+
+Not exactly sure if the flags are right, and this was a fun exercise. Ran out of
+time so I had to cut it short.
